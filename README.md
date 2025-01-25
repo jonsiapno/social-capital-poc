@@ -1,5 +1,8 @@
 # social-capital-proof-of-concept
 
+## prototype:
+https://www.figma.com/proto/PH59Yz1IXwjqfiVEsQcQzI/New-Chatbot?node-id=320-109&p=f&t=CWrk1LLQ2jtzIuE1-1&scaling=scale-down&content-scaling=fixed&page-id=0%3A1&starting-point-node-id=320%3A109
+
 To run the CLI application, TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN are not required.
 
 
