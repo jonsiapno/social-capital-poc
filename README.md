@@ -56,6 +56,3 @@ Stop the container on Docker Desktop
 ```bash
 docker-compose down
 ```
-# social-capital-proof-of-concept
-# social-capital-proof-of-concept
-# social-capital-proof-of-concept
