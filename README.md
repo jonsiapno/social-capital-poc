@@ -6,7 +6,7 @@ https://www.figma.com/proto/PH59Yz1IXwjqfiVEsQcQzI/New-Chatbot?node-id=320-109&p
 To run the CLI application, TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN are not required.
 
 
-Create a .env:
+Create a .env from .env-sample:
 ```markdown
 ```bash
 CHROMA_URL=http://chroma:8000
