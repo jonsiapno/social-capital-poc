@@ -1,54 +1,126 @@
+// src/services/ai.mjs
+
 import OpenAI from 'openai';
 import { config } from '../config/config.mjs';
 import { dbService } from './database.mjs';
+import { chromaService } from './chroma.mjs';
 
 class AIService {
     constructor() {
         this.openai = new OpenAI({ apiKey: config.openai.apiKey });
-        this.assistantConfig = {
-            name: "College Application Advisor",
-            instructions: "You are a college advisor to high school students. Use the 'get_student_name' and 'save_student_name' functions when needed to retrieve or save the student's name. To delete a student's name, save it as ''. Only show the top 3 of any list.",
+    }
+
+    createAssistantConfig() {
+        return {
+            name: "Social Capital Assistant",
+            instructions: `
+                You are an assistant that helps college students find opportunities by making new connections, just like successful job seekers do.
+
+                You provide clear and concise answers in plain text without any formatting like Markdown or HTML. 
+                
+                When listing email addresses, present them in plain text like "email@example.com" without any additional formatting or links.
+
+                Use the 'get_student_name' and 'save_student_name' functions when needed to retrieve or save the student's name. To delete a student's name, save it as ''. 
+                
+                Use the 'get_contact_with_relevant_experience' function to search for college students with relevant experience. 
+                If you find a college student with relevant experience, ask the user if they would like help drafting a first message to the contact.
+
+                If, during your conversation with the user, you detect any of the following intents:
+                - stress
+                - salary negotiation
+                - promotion
+                - career changes
+
+                Then you should use the 'human_in_the_loop' function to flag the message and provide a referral to Coach Kaitlyn.
+
+                When the 'human_in_the_loop' function is called, include the detected intents in the 'detected_intents' parameter.
+            `,
+            
             tools: [
-                {"type": "code_interpreter"},
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "get_student_name",
-                        "description": "Get name of the current student",
-                        "parameters": {
-                                "type": "object", 
-                                "properties": {
-                                }
-                            }
+                    type: "function",
+                    function: {
+                        name: "get_student_name",
+                        description: "Get name of the current student",
+                        parameters: {
+                            type: "object",
+                            properties: {}
+                        }
                     }
                 },
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "save_student_name",
-                        "description": "Save the student's first name to their account",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "first_name": {
-                                    "type": "string",
-                                    "description": "The student's first name"
+                    type: "function",
+                    function: {
+                        name: "save_student_name",
+                        description: "Save the student's first name to their account",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                first_name: {
+                                    type: "string",
+                                    description: "The student's first name"
                                 }
                             },
-                            "required": ["first_name"]
+                            required: ["first_name"]
+                        }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "get_contact_with_relevant_experience",
+                        description: "Your goal is to introduce the user to a college student with relevant experience. Call this function to find any college students with relevant experience. Ask the user if they would like help drafting the first message to the contact.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                search_query: {
+                                    type: "string",
+                                    description: "Describe the field that interests the user. This will be used as the search query to see if there are any existing contacts who already have that experience."
+                                }
+                            },
+                            required: ["search_query"]
+                        }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "human_in_the_loop",
+                        description: "Use this function when you detect any of the following intents: stress, salary negotiation, promotion, career changes. This will flag the message and provide a referral to Coach Kaitlyn.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                detected_intents: {
+                                    type: "array",
+                                    items: { type: "string" },
+                                    description: "List of detected intents."
+                                }
+                            },
+                            required: ["detected_intents"]
                         }
                     }
                 }
+
             ],
             model: "gpt-4-turbo-preview"
         };
     }
 
-    async deleteAssistant(assistantId) {
+    async createThread() {
         try {
-            const response = await this.openai.beta.assistants.del(assistantId);
-            console.log(`Assistant ${assistantId} deleted successfully`);
-            return response;
+            const thread = await this.openai.beta.threads.create();
+            return { success: true, threadId: thread.id };
+        } catch (error) {
+            console.error('Error creating thread:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    async deleteAssistant(assistantId) {
+        if (!assistantId) return;
+        
+        try {
+            await this.openai.beta.assistants.del(assistantId);
         } catch (error) {
             console.error('Error deleting assistant:', error);
             throw error;
@@ -71,89 +143,165 @@ class AIService {
             );
 
             for (const activeRun of activeRuns) {
-                console.log(`Cancelling active run ${activeRun.id}...`);
                 try {
                     await this.openai.beta.threads.runs.cancel(threadId, activeRun.id);
+                    await this.waitForRunStatus(threadId, activeRun.id);
                 } catch (error) {
                     if (error.status === 400 && error.error?.message.includes('Cannot cancel run with status')) {
-                        console.log(`Run ${activeRun.id} cannot be cancelled because it is ${activeRun.status}.`);
                         continue;
                     }
                     throw error;
                 }
-
-                let runStatus = activeRun.status;
-                while (!['cancelled', 'failed', 'completed', 'expired'].includes(runStatus)) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    const runInfo = await this.openai.beta.threads.runs.retrieve(threadId, activeRun.id);
-                    runStatus = runInfo.status;
-                }
-                console.log(`Run ${activeRun.id} has status '${runStatus}'.`);
             }
         } catch (error) {
             console.error('Error cancelling active runs:', error);
+            throw error;
         }
     }
 
-    async processToolCalls(threadId, runId, requiredAction, id) {
-        const tool_outputs = [];
-        for (const tool_call of requiredAction.submit_tool_outputs.tool_calls) {
-            if (tool_call.function.name === "get_student_name") {
-                const name = await dbService.getStudentName(id);
-                tool_outputs.push({
-                    tool_call_id: tool_call.id,
-                    output: name,
-                });
+    async waitForRunStatus(threadId, runId, targetStatuses = ['cancelled', 'failed', 'completed', 'expired']) {
+        let runStatus;
+        do {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const runInfo = await this.openai.beta.threads.runs.retrieve(threadId, runId);
+            runStatus = runInfo.status;
+        } while (!targetStatuses.includes(runStatus));
+        
+        return runStatus;
+    }
+
+    async handleToolCalls(threadId, runId, toolCalls, userId) {
+        const toolOutputs = [];
+        
+        for (const toolCall of toolCalls) {
+            const args = JSON.parse(toolCall.function.arguments || '{}');
+            let output;
+
+            switch (toolCall.function.name) {
+                case 'get_student_name':
+                    output = await dbService.getStudentName(userId);
+                    break;
+                    
+                case 'save_student_name':
+                    const name = args.name || args.first_name;
+                    output = await dbService.saveStudentName(userId, name);
+                    break;
+                    
+                case 'get_contact_with_relevant_experience':
+                    const result = await chromaService.initializeAndQuery(args.search_query);
+                    output = JSON.stringify(result);
+                    break;
+
+                case 'human_in_the_loop':
+                    // Handle the human_in_the_loop tool
+                    const detectedIntents = args.detected_intents;
+                    const flaggedReason = detectedIntents.join(', ');
+
+                    console.log('Detected intents:', detectedIntents);
+
+                    // Get the last user message ID
+                    const lastUserMessageId = await dbService.getLastUserMessageId(userId);
+
+                    if (lastUserMessageId) {
+                        await dbService.updateMessageFlag(lastUserMessageId, true, flaggedReason);
+                    } else {
+                        console.error('No last user message ID found to flag.');
+                    }
+                    // Provide the Calendly link
+                    output = `I recommend you meet with Coach Kaitlyn at https://calendly.com/Kaitlyn`;
+                    break;
             }
 
-            if (tool_call.function.name === "save_student_name") {
-                const args = JSON.parse(tool_call.function.arguments || '{}');
-                const name = args.name || args.first_name;
-                const result = await dbService.saveStudentName(id, name);
-                tool_outputs.push({
-                    tool_call_id: tool_call.id,
-                    output: JSON.stringify(result),
-                });
-            }
+            toolOutputs.push({
+                tool_call_id: toolCall.id,
+                output: output
+            });
         }
 
-        await this.openai.beta.threads.runs.submitToolOutputs(
+        return this.openai.beta.threads.runs.submitToolOutputs(
             threadId,
             runId,
-            { tool_outputs }
+            { tool_outputs: toolOutputs }
         );
     }
 
-    async waitForRunCompletion(threadId, runId, id, maxAttempts = 10) {
+    async waitForRunCompletion(threadId, runId, userId, maxAttempts = 20) {
+        const baseDelay = 1000;
         let attemptCount = 0;
+
         while (attemptCount < maxAttempts) {
-            const polledRun = await this.openai.beta.threads.runs.retrieve(threadId, runId);
-    
-            if (polledRun.status === 'completed') return polledRun;
-    
-            if (polledRun.status === 'requires_action') {
-                await this.processToolCalls(threadId, runId, polledRun.required_action, id);
+            try {
+                const run = await this.openai.beta.threads.runs.retrieve(threadId, runId);
+                
+                switch (run.status) {
+                    case 'completed':
+                        return run;
+                    case 'requires_action':
+                        await this.handleToolCalls(
+                            threadId, 
+                            runId, 
+                            run.required_action.submit_tool_outputs.tool_calls,
+                            userId
+                        );
+                        break;
+                    case 'failed':
+                    case 'cancelled':
+                    case 'expired':
+                        throw new Error(`Run ended with status: ${run.status}`);
+                }
+            } catch (error) {
+                console.error('Error in run completion loop:', error);
+                throw error;
             }
-    
-            if (['failed', 'cancelled', 'expired'].includes(polledRun.status)) {
-                break;
-            }
-    
-            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            await new Promise(resolve => setTimeout(resolve, baseDelay * (attemptCount + 1)));
             attemptCount++;
         }
-    
-        throw new Error('Run did not complete in time');
+        
+        throw new Error('Run did not complete within the maximum number of attempts');
     }
 
-    async generateResponse(message, threadId, id) {
+    async moderateMessage(text, messageId) {
+        try {
+            const moderationResponse = await this.openai.moderations.create({
+                model: "omni-moderation-latest",
+                input: text
+            });
+    
+            if (moderationResponse?.results?.length > 0) {
+                const moderationResult = moderationResponse.results[0];
+    
+                let flaggedReason = null;
+                if (moderationResult.flagged) {
+                    flaggedReason = Object.entries(moderationResult.categories)
+                        .filter(([_, isFlagged]) => isFlagged)
+                        .map(([category, _]) => category)
+                        .join(', ');
+                }
+        
+                // Save the flagged status and reason to the database
+                await dbService.updateMessageFlag(messageId, moderationResult.flagged, flaggedReason);
+    
+                return moderationResult.flagged;
+            } else {
+                console.warn('Unexpected moderation response format:', moderationResponse);
+                return false;
+            }
+        } catch (error) {
+            console.error('Error during message moderation:', error);
+            return false;
+        }
+    }
+
+    async generateResponse(message, threadId, userId) {
         let assistant = null;
+        
         try {
             await this.cancelActiveRuns(threadId);
 
-            // Parallel processing of assistant creation and message sending
+            // Create assistant and send message in parallel
             const [createdAssistant, threadMessage] = await Promise.all([
-                this.openai.beta.assistants.create(this.assistantConfig),
+                this.openai.beta.assistants.create(this.createAssistantConfig()),
                 this.openai.beta.threads.messages.create(threadId, {
                     role: "user",
                     content: message
@@ -163,271 +311,29 @@ class AIService {
             assistant = createdAssistant;
 
             const run = await this.openai.beta.threads.runs.create(threadId, {
-                assistant_id: assistant.id,
+                assistant_id: assistant.id
             });
 
-            await this.waitForRunCompletion(threadId, run.id, id);
+            await this.waitForRunCompletion(threadId, run.id, userId);
 
             const messages = await this.openai.beta.threads.messages.list(threadId);
             const lastMessageForRun = messages.data
                 .filter(message => message.run_id === run.id && message.role === "assistant")
                 .pop();
 
-            let response = "I apologize, but I'm having trouble generating a response right now.";
-            
-            if (lastMessageForRun?.content[0]?.text?.value) {
-                response = lastMessageForRun.content[0].text.value;
-            }
-
-            // Trigger assistant cleanup without awaiting it
-            if (assistant?.id) {
-                this.cleanupAssistant(assistant.id);
-            }
-
-            return response;
+            return lastMessageForRun?.content[0]?.text?.value || 
+                   "I apologize, but I'm having trouble generating a response right now.";
 
         } catch (error) {
             console.error('Error generating AI response:', error);
-            
-            // Trigger cleanup without awaiting it
-            if (assistant?.id) {
-                this.cleanupAssistant(assistant.id);
-            }
-            
             return "I apologize, but I'm having trouble processing your request right now.";
-        }
-    }
-    }
-
-export const aiService = new AIService();
-
-
-/*
-
-Revert to code below
-
-import OpenAI from 'openai';
-import { config } from '../config/config.mjs';
-import { dbService } from './database.mjs';
-
-class AIService {
-    constructor() {
-        this.openai = new OpenAI({ apiKey: config.openai.apiKey });
-    }
-
-    async deleteAssistant(assistantId) {
-        try {
-            const response = await this.openai.beta.assistants.del(assistantId);
-            console.log(`Assistant ${assistantId} deleted successfully`);
-            return response;
-        } catch (error) {
-            console.error('Error deleting assistant:', error);
-            throw error;
-        }
-    }
-
-    async cleanupAssistant(assistantId) {
-        if (assistantId) {
-            // Fire and forget - don't await the deletion
-            this.deleteAssistant(assistantId).catch(error => {
-                console.error('Background assistant cleanup failed:', error);
-            });
-        }
-    }
-
-    async cancelActiveRuns(threadId) {
-        try {
-            const runsList = await this.openai.beta.threads.runs.list(threadId);
-            const activeRuns = runsList.data.filter(run => 
-                !['completed', 'cancelled', 'failed', 'expired', 'cancelling'].includes(run.status)
-            );
-
-            for (const activeRun of activeRuns) {
-                console.log(`Cancelling active run ${activeRun.id}...`);
-                try {
-                    await this.openai.beta.threads.runs.cancel(threadId, activeRun.id);
-                } catch (error) {
-                    if (error.status === 400 && error.error?.message.includes('Cannot cancel run with status')) {
-                        console.log(`Run ${activeRun.id} cannot be cancelled because it is ${activeRun.status}.`);
-                        continue;
-                    }
-                    throw error;
-                }
-
-                let runStatus = activeRun.status;
-                while (!['cancelled', 'failed', 'completed', 'expired'].includes(runStatus)) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    const runInfo = await this.openai.beta.threads.runs.retrieve(threadId, activeRun.id);
-                    runStatus = runInfo.status;
-                }
-                console.log(`Run ${activeRun.id} has status '${runStatus}'.`);
-            }
-        } catch (error) {
-            console.error('Error cancelling active runs:', error);
-        }
-    }
-
-    async generateResponse(message, threadId, id) {
-        let assistant = null;
-        try {
-            await this.cancelActiveRuns(threadId);
-
-            assistant = await this.openai.beta.assistants.create({
-                name: "College Application Advisor",
-                instructions: "You are a college advisor to high school students. Use the 'get_student_name' and 'save_student_name' functions when needed to retrieve or save the student's name. To delete a student's name, save it as ''. Only show the top 3 of any list.",
-                tools: [
-                    {"type": "code_interpreter"},
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "get_student_name",
-                            "description": "Get name of the current student",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {}
-                            }
-                        }
-                    },
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "save_student_name",
-                            "description": "Save the student's first name to their account",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "first_name": {
-                                        "type": "string",
-                                        "description": "The student's first name"
-                                    }
-                                },
-                                "required": ["first_name"]
-                            }
-                        }
-                    }
-                ],
-                model: "gpt-4-turbo-preview"
-            });
-
-            await this.openai.beta.threads.messages.create(threadId, {
-                role: "user",
-                content: message
-            });
-
-            const run = await this.openai.beta.threads.runs.create(threadId, {
-                assistant_id: assistant.id,
-            });
-
-            let attemptCount = 0;
-            const maxAttempts = 5;
-
-            while (attemptCount < maxAttempts) {
-                let polledRun = await this.openai.beta.threads.runs.retrieve(threadId, run.id);
-
-                if (polledRun.status === 'completed') {
-                    break;
-                }
-
-                if (polledRun.status === 'requires_action') {
-                    const requiredAction = polledRun.required_action;
-                    if (requiredAction) {
-                        const tool_outputs = [];
-
-                        for (const tool_call of requiredAction.submit_tool_outputs.tool_calls) {
-                            if (tool_call.function.name === "get_student_name") {
-                                const name = await dbService.getStudentName(id);
-                                tool_outputs.push({
-                                    tool_call_id: tool_call.id,
-                                    output: name,
-                                });
-                            }
-
-                            if (tool_call.function.name === "save_student_name") {
-                                const args = JSON.parse(tool_call.function.arguments || '{}');
-                                const name = args.name || args.first_name;
-                                const result = await dbService.saveStudentName(id, name);
-                                tool_outputs.push({
-                                    tool_call_id: tool_call.id,
-                                    output: JSON.stringify(result),
-                                });
-                            }
-                        }
-
-                        polledRun = await this.openai.beta.threads.runs.retrieve(threadId, run.id);
-                        while (polledRun.status === 'queued') {
-                            await new Promise(resolve => setTimeout(resolve, 100));
-                            polledRun = await this.openai.beta.threads.runs.retrieve(threadId, run.id);
-                        }
-
-                        await this.openai.beta.threads.runs.submitToolOutputs(
-                            threadId,
-                            run.id,
-                            { tool_outputs }
-                        );
-                    }
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 500));
-                attemptCount++;
-            }
-
-            let finalRunStatus = await this.openai.beta.threads.runs.retrieve(threadId, run.id);
-
-            if (finalRunStatus.status !== 'completed') {
-                finalRunStatus = await this.openai.beta.threads.runs.retrieve(threadId, run.id);
-                if (finalRunStatus.status === 'completed') {
-                    // Proceed to retrieve the assistant's response
-                } else {
-                    try {
-                        await this.openai.beta.threads.runs.cancel(threadId, run.id);
-                        while (true) {
-                            const runStatus = await this.openai.beta.threads.runs.retrieve(threadId, run.id);
-                            if (['cancelled', 'failed', 'expired'].includes(runStatus.status)) {
-                                break;
-                            }
-                            await new Promise(resolve => setTimeout(resolve, 2000));
-                        }
-                    } catch (error) {
-                        if (error.status === 400 && error.message.includes("Cannot cancel run with status 'completed'")) {
-                            console.log(`Run ${run.id} has already completed.`);
-                        } else {
-                            console.error(`Error canceling run ${run.id}: ${error.message}`);
-                            throw new Error("Unable to cancel run");
-                        }
-                    }
-                }
-            }
-
-            const messages = await this.openai.beta.threads.messages.list(threadId);
-            const lastMessageForRun = messages.data
-                .filter(message => message.run_id === run.id && message.role === "assistant")
-                .pop();
-
-            let response = "I apologize, but I'm having trouble generating a response right now.";
-            
-            if (lastMessageForRun?.content[0]?.text?.value) {
-                response = lastMessageForRun.content[0].text.value;
-            }
-
-            // Trigger assistant cleanup without awaiting it
+        } finally {
+            // Always cleanup the assistant in the background
             if (assistant?.id) {
                 this.cleanupAssistant(assistant.id);
             }
-
-            return response;
-
-        } catch (error) {
-            console.error('Error generating AI response:', error);
-            
-            // Trigger cleanup without awaiting it
-            if (assistant?.id) {
-                this.cleanupAssistant(assistant.id);
-            }
-            
-            return "I apologize, but I'm having trouble processing your request right now.";
         }
     }
 }
 
 export const aiService = new AIService();
-*/
