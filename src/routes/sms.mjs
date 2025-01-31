@@ -10,41 +10,74 @@ const twilioClient = twilio(config.twilio.accountSid, config.twilio.authToken);
 
 router.post('/', validateTwilioRequest, async (req, res) => {
     try {
-        const incomingMessage = req.body.Body.trim();
+
+        // Extract and log incoming message details
+        const incomingMessage = req.body.Body ? req.body.Body.trim() : '';
         const senderNumber = req.body.From;
-        
-        const accountInfo = await dbService.getOrCreateAccount(senderNumber);
+        const messagingServiceSid = req.body.MessagingServiceSid;
 
-        if (!accountInfo.success) {
-            console.error('Failed to get/create account:', accountInfo.error);
-            res.status(500).send('Internal Server Error');
-            return;
-        }
-
-        const { id, thread_id } = accountInfo.data;
-        console.log(`Account ${accountInfo.isNewAccount ? 'created' : 'found'}:`, accountInfo.data);
-
-        await dbService.saveMessage(id, 'user', incomingMessage);
-
-        let responseMessage;
-        if (incomingMessage.toLowerCase() === 'stop') {
-            responseMessage = "You've been unsubscribed. Reply START to resubscribe.";
-            // TODO: Insert logic to indicate that the user is inactive
-
-        } else if (incomingMessage.toLowerCase() === 'start') {
-            responseMessage = "Welcome back! You're now resubscribed.";
-            
-        } else {
-            responseMessage = await aiService.generateResponse(incomingMessage, thread_id, id);
-        }
-
-        await dbService.saveMessage(id, 'assistant', responseMessage);
-
-        const twiml = new twilio.twiml.MessagingResponse();
-        twiml.message(responseMessage);
-        
+        // Send an empty response back to Twilio immediately
+        const twiml = new twilio.twiml.MessagingResponse(); // No message added
         res.writeHead(200, { 'Content-Type': 'text/xml' });
         res.end(twiml.toString());
+
+        // Now process the message asynchronously
+        (async () => {
+            try {
+
+                const accountInfo = await dbService.getOrCreateAccount(senderNumber);
+
+                if (!accountInfo.success) {
+                    console.error('Failed to get/create account:', accountInfo.error);
+                    return;
+                }
+
+                const { id, thread_id } = accountInfo.data;
+
+                // Save the incoming message and get its messageId
+                const userMessageId = await dbService.saveMessage(id, 'user', incomingMessage);
+
+                // Moderate the incoming message
+                const isFlagged = await aiService.moderateMessage(incomingMessage, userMessageId);
+
+                if (isFlagged) {
+                    console.log(`Incoming message flagged and processed: Message ID ${userMessageId}`);
+                }
+
+                let responseMessage;
+                if (incomingMessage.toLowerCase() === 'stop') {
+                    responseMessage = "You've been unsubscribed. Reply START to resubscribe.";
+                    // TODO: Update user's active status in the database
+
+                } else if (incomingMessage.toLowerCase() === 'start') {
+                    responseMessage = "Welcome back! You're now resubscribed.";
+                    // TODO: Update user's active status in the database
+
+                } else {
+                    responseMessage = await aiService.generateResponse(incomingMessage, thread_id, id);
+                }
+
+                // Save the AI response
+                const aiMessageId = await dbService.saveMessage(id, 'assistant', responseMessage);
+
+                // Moderate the AI response
+                const aiIsFlagged = await aiService.moderateMessage(responseMessage, aiMessageId);
+
+                if (aiIsFlagged) {
+                    console.log(`Outgoing AI message flagged and processed: Message ID ${aiMessageId}`);
+                }
+
+                // Send AI response to the user via Twilio
+                await twilioClient.messages.create({
+                    body: responseMessage,
+                    messagingServiceSid: messagingServiceSid, // Use the extracted MessagingServiceSid
+                    to: senderNumber,
+                });
+
+            } catch (asyncError) {
+                console.error('Error in asynchronous processing:', asyncError);
+            }
+        })();
 
     } catch (error) {
         console.error('Error processing SMS webhook:', error);
