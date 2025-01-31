@@ -1,122 +1,126 @@
-import { ChromaClient } from "chromadb";
-import { config } from "../config/config.mjs";
+// src/services/chroma.mjs
 
-async function deleteCollection(client, collectionName) {
-    try {
-        await client.deleteCollection({
-            name: collectionName
-        });
-        console.log(`Collection ${collectionName} deleted successfully`);
-    } catch (error) {
-        console.error('Error deleting collection:', error);
+import { ChromaClient } from 'chromadb';
+import { config } from '../config/config.mjs';
+import { dbService } from './database.mjs';
+
+class ChromaService {
+    constructor() {
+        this.client = new ChromaClient({ path: config.chroma.url });
+        this.collectionName = 'my_collection';
     }
-}
 
-async function createCollection(client, collectionName) {
-    try {
-        const collection = await client.createCollection({
-            name: collectionName,
-            metadatas: {
-                "description": "My first collection"
-            }
-        });
-        console.log(`Collection ${collectionName} created successfully`);
-        return collection;
-    } catch (error) {
-        console.error('Error creating collection:', error);
-        return null;
-    }
-}
-
-async function addToCollection(collection, documents, metadatas, ids) {
-    try {
-        await collection.add({
-            documents: documents,
-            metadatas: metadatas,
-            ids: ids
-        });
-        console.log('Items added successfully');
-    } catch (error) {
-        console.error('Error adding items:', error);
-    }
-}
-
-async function queryCollection(collection, queryTexts, numResults = 2) {
-    try {
-        const results = await collection.query({
-            queryTexts: queryTexts,
-            nResults: numResults
-        });
-
-        // Sort results by distance (closest first)
-        const sortedResults = results.ids[0].map((id, index) => ({
-            id: id,
-            document: results.documents[0][index],
-            metadata: results.metadatas[0][index],
-            distance: results.distances[0][index]
-        })).sort((a, b) => a.distance - b.distance);
-
-        console.log('Sorted Query Results:');
-        sortedResults.forEach(result => {
-            console.log(`ID: ${result.id}`);
-            console.log(`Document: ${result.document}`);
-            console.log(`Metadata: ${JSON.stringify(result.metadata)}`);
-            console.log(`Distance: ${result.distance}`);
-            console.log('---');
-        });
-
-        return sortedResults;
-    } catch (error) {
-        console.log('Error querying collection:', error);
-        return null;
-    }
-}
-
-async function initializeAndQuery() {
-    const chromaClient = new ChromaClient({
-        path: config.chroma.url
-    });
-
-    try {
+    async connect() {
         let retries = 5;
         while (retries > 0) {
             try {
-                await chromaClient.heartbeat();
-                console.log("Successfully connected to ChromaDB");
-                break;
+                await this.client.heartbeat();
+                return true;
             } catch (error) {
-                console.log(`Waiting for ChromaDB to be ready... (${retries} attempts remaining)`);
                 retries--;
                 await new Promise(resolve => setTimeout(resolve, 2000));
+                if (retries === 0) {
+                    throw new Error('Failed to connect to ChromaDB after multiple attempts');
+                }
             }
         }
-        if (retries === 0) {
-            throw new Error("Failed to connect to ChromaDB");
-        } 
+    }
 
-        const collectionName = 'my_collection';
-        await deleteCollection(chromaClient, collectionName);
-        const collection = await createCollection(chromaClient, collectionName);
-
-        if (collection) {
-            const documents = [
-                "The quick brown fox jumps over the lazy dog",
-                "Hello, world!",
-                "ChromaDB is awesome"
-            ];
-            const metadatas = [
-                { source: "example1" },
-                { source: "example2" },
-                { source: "example3" }
-            ];
-            const ids = ["id1", "id2", "id3"];
-
-            await addToCollection(collection, documents, metadatas, ids);
-            await queryCollection(collection, ["fox"]);
+    async deleteCollection() {
+        try {
+            await this.client.deleteCollection({ name: this.collectionName });
+            return true;
+        } catch (error) {
+            // Collection might not exist, ignore error
+            return false;
         }
-    } catch (error) {
-        console.error("Application error:", error);
+    }
+
+    async createCollection() {
+        try {
+            return await this.client.createCollection({
+                name: this.collectionName,
+                metadatas: {
+                    description: 'Student internship experience collection'
+                }
+            });
+        } catch (error) {
+            console.error('Error creating collection:', error);
+            throw error;
+        }
+    }
+
+    async addToCollection(collection, documents, metadatas, ids) {
+        try {
+            await collection.add({ documents, metadatas, ids });
+            return true;
+        } catch (error) {
+            console.error('Error adding items to collection:', error);
+            throw error;
+        }
+    }
+
+    async queryCollection(collection, queryTexts, numResults = 3) {
+        try {
+            const results = await collection.query({
+                queryTexts,
+                nResults: numResults
+            });
+
+            return {
+                metadata: "Results ranked in order of relevance (smaller distance is better)",
+                results: results.ids[0].map((id, index) => ({
+                    id,
+                    document: results.documents[0][index],
+                    metadata: results.metadatas[0][index],
+                    distance: results.distances[0][index]
+                })).sort((a, b) => a.distance - b.distance)
+            };
+        } catch (error) {
+            console.error('Error querying collection:', error);
+            throw error;
+        }
+    }
+
+    async initializeAndQuery(searchQuery) {
+        try {
+            // Connect to ChromaDB
+            await this.connect();
+
+            // Reset and create collection
+            await this.deleteCollection();
+            const collection = await this.createCollection();
+
+            // Get internship data from database
+            const accountData = await dbService.getInternshipAccounts();
+
+            if (accountData.length === 0) {
+                return { results: [] };
+            }
+
+            // Prepare data for Chroma
+            const documents = accountData.map(row =>
+                `${row.first_name} ${row.last_name} is a college student who is pursuing a career in ${row.field} and they have already had a relevant internship.`
+            );
+
+            const metadatas = accountData.map(row => ({
+                id: row.id,
+                firstName: row.first_name,
+                lastName: row.last_name,
+                email: row.email_address,
+                field: row.field
+            }));
+
+            const ids = accountData.map(row => `${row.id}`);
+
+            // Add data to collection and perform search
+            await this.addToCollection(collection, documents, metadatas, ids);
+            return await this.queryCollection(collection, [searchQuery]);
+        } catch (error) {
+            console.error('Error in initializeAndQuery:', error);
+            throw error;
+        }
     }
 }
 
-initializeAndQuery();
+export const chromaService = new ChromaService();
