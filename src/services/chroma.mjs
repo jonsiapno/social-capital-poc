@@ -4,6 +4,9 @@ import { ChromaClient } from 'chromadb';
 import { config } from '../config/config.mjs';
 import { dbService } from './database.mjs';
 
+/**
+ * All interaction with Chroma is handled here
+ */
 class ChromaService {
     constructor() {
         this.client = new ChromaClient({ path: config.chroma.url });

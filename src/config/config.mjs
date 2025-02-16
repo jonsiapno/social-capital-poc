@@ -1,6 +1,10 @@
 import dotenv from 'dotenv';
+
 dotenv.config();
 
+/**
+ * Decodes the environment variables into a JSON object which organizes them by type
+ */
 export const config = {
     port: process.env.PORT || 3000,
     openai: {

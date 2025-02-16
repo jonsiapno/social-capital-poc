@@ -1,5 +1,8 @@
 import twilio from 'twilio';
 
+/**
+ * This is middleware to validate a twilio-received input.
+ */
 export const validateTwilioRequest = (req, res, next) => {
     if (process.env.NODE_ENV !== 'production') {
         return next();
