@@ -1,7 +1,13 @@
 import cron from 'node-cron';
 import moment from 'moment-timezone';
 import Bottleneck from 'bottleneck';
-import { dbService } from '../services/database.mjs';
+import {dbService} from '../services/database.mjs';
+
+/**
+ * This schedules the reminder messages.  This would be started by a cron job.
+ *
+ * It is missing the final step, which is to trigger request processing and reminder generation.
+ */
 
 // Configurable variables
 const DAYS_SINCE_LAST_MESSAGE = 7; // You can change this value as needed
@@ -19,9 +25,9 @@ const limiter = new Bottleneck({
     reservoir: RESERVOIR, // Initial number of API calls that can be made
     reservoirRefreshAmount: RESERVOIR,
     reservoirRefreshInterval: RESERVOIR_REFRESH_INTERVAL, // Refresh the reservoir every 1 second
-    });
+});
 
-    // Function to run every hour
+// Function to run every hour
 async function scheduledTask() {
     console.log('Cron job started at', new Date());
 
@@ -34,34 +40,34 @@ async function scheduledTask() {
 
         // Process accounts using Bottleneck limiter
         const promises = accounts.map((account) =>
-        limiter.schedule(async () => {
-            const userId = account.id;
-            const userTimezone = account.timezone || 'America/Los_Angeles'; // Default timezone
+            limiter.schedule(async () => {
+                const userId = account.id;
+                const userTimezone = account.timezone || 'America/Los_Angeles'; // Default timezone
 
-            // Get current time in user's timezone
-            const userNow = nowUtc.clone().tz(userTimezone);
+                // Get current time in user's timezone
+                const userNow = nowUtc.clone().tz(userTimezone);
 
-            // Check if it's 4:00 PM in user's timezone
-            if (userNow.hour() === 16 && userNow.minute() === 0) {
-            console.log(`It's 4:00 PM for user ${userId}`);
+                // Check if it's 4:00 PM in user's timezone
+                if (userNow.hour() === 16 && userNow.minute() === 0) {
+                    console.log(`It's 4:00 PM for user ${userId}`);
 
-            // Calculate the start and end of the day for DAYS_SINCE_LAST_MESSAGE days ago
-            const daysAgoStart = userNow
-                .clone()
-                .subtract(DAYS_SINCE_LAST_MESSAGE, 'days')
-                .startOf('day');
-            const daysAgoEnd = userNow
-                .clone()
-                .subtract(DAYS_SINCE_LAST_MESSAGE, 'days')
-                .endOf('day');
+                    // Calculate the start and end of the day for DAYS_SINCE_LAST_MESSAGE days ago
+                    const daysAgoStart = userNow
+                        .clone()
+                        .subtract(DAYS_SINCE_LAST_MESSAGE, 'days')
+                        .startOf('day');
+                    const daysAgoEnd = userNow
+                        .clone()
+                        .subtract(DAYS_SINCE_LAST_MESSAGE, 'days')
+                        .endOf('day');
 
-            // Format dates for SQL
-            const daysAgoStartStr = daysAgoStart.format('YYYY-MM-DD HH:mm:ss');
-            const daysAgoEndStr = daysAgoEnd.format('YYYY-MM-DD HH:mm:ss');
-            const todayStr = userNow.format('YYYY-MM-DD');
+                    // Format dates for SQL
+                    const daysAgoStartStr = daysAgoStart.format('YYYY-MM-DD HH:mm:ss');
+                    const daysAgoEndStr = daysAgoEnd.format('YYYY-MM-DD HH:mm:ss');
+                    const todayStr = userNow.format('YYYY-MM-DD');
 
-            // Prepare queries
-            const lastUserMessageQuery = `
+                    // Prepare queries
+                    const lastUserMessageQuery = `
                 SELECT created_at
                 FROM messages
                 WHERE account_id = ? AND role = 'user'
@@ -70,7 +76,7 @@ async function scheduledTask() {
                 LIMIT 1
             `;
 
-            const assistantMessageTodayQuery = `
+                    const assistantMessageTodayQuery = `
                 SELECT created_at
                 FROM messages
                 WHERE account_id = ? AND role = 'assistant'
@@ -78,31 +84,33 @@ async function scheduledTask() {
                 LIMIT 1
             `;
 
-            try {
-                const [lastUserMessages] = await dbService.pool.query(lastUserMessageQuery, [userId, daysAgoStartStr, daysAgoEndStr]);
-                const [assistantMessagesToday] = await dbService.pool.query(assistantMessageTodayQuery, [userId, todayStr]);
+                    try {
+                        const [lastUserMessages] = await dbService.pool.query(lastUserMessageQuery, [userId, daysAgoStartStr, daysAgoEndStr]);
+                        const [assistantMessagesToday] = await dbService.pool.query(assistantMessageTodayQuery, [userId, todayStr]);
 
-                if (lastUserMessages.length > 0 && assistantMessagesToday.length === 0) {
-                console.log(`User ${userId} meets the criteria.`);
-                // TODO: Insert logic for generating and sending a follow-up message
-                // await generateChatCompletion(userId);
-                console.log(`Generated chat completion for user ${userId}.`);
+                        if (lastUserMessages.length > 0 && assistantMessagesToday.length === 0) {
+                            console.log(`User ${userId} meets the criteria.`);
+
+                            // TODO: Insert logic for generating and sending a follow-up message
+                            // await generateChatCompletion(userId);
+
+                            console.log(`Generated chat completion for user ${userId}.`);
+                        } else {
+                            console.log(`User ${userId} does not meet the criteria.`);
+                        }
+
+                    } catch (err) {
+                        console.error(`Error processing user ${userId}:`, err);
+                    }
                 } else {
-                console.log(`User ${userId} does not meet the criteria.`);
+                    console.log(`It's not 4:00 PM for user ${userId}.`);
                 }
-                
-            } catch (err) {
-                console.error(`Error processing user ${userId}:`, err);
-            }
-            } else {
-            console.log(`It's not 4:00 PM for user ${userId}.`);
-            }
-        })
+            })
         );
 
         await Promise.all(promises);
         console.log('Cron job completed at', new Date());
-        
+
     } catch (err) {
         console.error('Error fetching accounts:', err);
     }

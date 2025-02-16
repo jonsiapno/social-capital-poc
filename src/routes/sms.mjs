@@ -8,6 +8,13 @@ import { config } from '../config/config.mjs';
 const router = express.Router();
 const twilioClient = twilio(config.twilio.accountSid, config.twilio.authToken);
 
+
+/**
+ * Process an inbound Twilio message, by:
+ * 1) recording it in the database,
+ * 2) moderating it - using OpenAI moderation api
+ * 3) processing it - using OpenAI assistant api
+ */
 router.post('/', validateTwilioRequest, async (req, res) => {
     try {
 

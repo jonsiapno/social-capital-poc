@@ -4,6 +4,9 @@ import mysql from 'mysql2/promise';
 import { config } from '../config/config.mjs';
 import { aiService } from './ai.mjs';
 
+/**
+ * All interaction with database is handled here
+ */
 class DatabaseService {
     constructor() {
         this.pool = mysql.createPool(config.mysql);
@@ -76,7 +79,7 @@ class DatabaseService {
     async saveMessage(id, role, text) {
         try {
             const [result] = await this.pool.query(
-                'INSERT INTO messages (account_id, role, text, flagged) VALUES (?, ?, ?, 0)', 
+                'INSERT INTO messages (account_id, role, text, flagged) VALUES (?, ?, ?, 0)',
                 [id, role, text]
             );
             return result.insertId; // Return messageId for later flag updates
@@ -169,13 +172,13 @@ class DatabaseService {
     async getInternshipAccounts() {
         try {
             const [rows] = await this.pool.query(
-                `SELECT 
-                    id, 
-                    first_name, 
-                    last_name, 
-                    email_address, 
-                    field 
-                FROM accounts 
+                `SELECT
+                    id,
+                    first_name,
+                    last_name,
+                    email_address,
+                    field
+                FROM accounts
                 WHERE internship_experience = 1`
             );
             return rows;

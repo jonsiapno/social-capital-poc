@@ -1,7 +1,12 @@
 import readline from 'readline';
-import { dbService } from './services/database.mjs';
-import { aiService } from './services/ai.mjs';
+import {dbService} from './services/database.mjs';
+import {aiService} from './services/ai.mjs';
 
+/**
+ * The CLI program, which runs in its own window, and handles inputs.
+ *
+ * How does it call the server?  It doesn't, instead it contains a copy of the server.
+ */
 export async function startCLI(initialPhoneNumber = null) {
     const rl = readline.createInterface({
         input: process.stdin,
@@ -18,7 +23,7 @@ export async function startCLI(initialPhoneNumber = null) {
                 console.error('Failed to initialize account for phone number:', phoneNumber);
                 return false;
             }
-            currentAccount = accountInfo.data;
+            currentAccount = accountInfo.data; // this is the important line.
             console.log(`\nSwitched to user account: ${phoneNumber}`);
             const recentMessages = await dbService.getMessages(currentAccount.id, 5);
             console.log('\nFetched recent messages:', recentMessages.length);
@@ -29,7 +34,7 @@ export async function startCLI(initialPhoneNumber = null) {
                     console.log(`${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}\n`);
                 });
             }
-            
+
             return true;
         } catch (error) {
             console.error('Error switching user:', error);
@@ -73,7 +78,7 @@ export async function startCLI(initialPhoneNumber = null) {
                 console.log('\n');
                 return true;
 
-            case '/clear':
+            case '/clear': // what we really need is something that clears the history.
                 console.clear();
                 return true;
 
@@ -119,7 +124,7 @@ export async function startCLI(initialPhoneNumber = null) {
 
     const askQuestion = () => {
         const prompt = currentAccount ? 'You: ' : 'Enter phone number to start (/help for commands): ';
-        
+
         rl.question(prompt, async (input) => {
             if (!input.trim()) {
                 console.log('No input provided, asking again.');
@@ -128,7 +133,7 @@ export async function startCLI(initialPhoneNumber = null) {
             }
 
             if (input.startsWith('/')) {
-                const handled = await handleCommand(input);
+                const handled = await handleCommand(input); // the commands start with "/" and are trapped here
                 if (handled) {
                     askQuestion();
                     return;
@@ -146,8 +151,8 @@ export async function startCLI(initialPhoneNumber = null) {
                 return;
             }
 
-            await handleUserMessage(input);
-            askQuestion();
+            await handleUserMessage(input); // this does the work
+            askQuestion(); // this is a recursive call, and it should be loop over the ask/reesponse sequence
         });
     };
 

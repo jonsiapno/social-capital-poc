@@ -5,24 +5,31 @@ import { config } from '../config/config.mjs';
 import { dbService } from './database.mjs';
 import { chromaService } from './chroma.mjs';
 
+/**
+ * All interaction with OpenAI API is located here.
+ */
+
 class AIService {
     constructor() {
         this.openai = new OpenAI({ apiKey: config.openai.apiKey });
     }
 
+    /**
+     * Method to set up assistant
+     */
     createAssistantConfig() {
         return {
             name: "Social Capital Assistant",
             instructions: `
                 You are an assistant that helps college students find opportunities by making new connections, just like successful job seekers do.
 
-                You provide clear and concise answers in plain text without any formatting like Markdown or HTML. 
-                
+                You provide clear and concise answers in plain text without any formatting like Markdown or HTML.
+
                 When listing email addresses, present them in plain text like "email@example.com" without any additional formatting or links.
 
-                Use the 'get_student_name' and 'save_student_name' functions when needed to retrieve or save the student's name. To delete a student's name, save it as ''. 
-                
-                Use the 'get_contact_with_relevant_experience' function to search for college students with relevant experience. 
+                Use the 'get_student_name' and 'save_student_name' functions when needed to retrieve or save the student's name. To delete a student's name, save it as ''.
+
+                Use the 'get_contact_with_relevant_experience' function to search for college students with relevant experience.
                 If you find a college student with relevant experience, ask the user if they would like help drafting a first message to the contact.
 
                 If, during your conversation with the user, you detect any of the following intents:
@@ -35,7 +42,7 @@ class AIService {
 
                 When the 'human_in_the_loop' function is called, include the detected intents in the 'detected_intents' parameter.
             `,
-            
+
             tools: [
                 {
                     type: "function",
@@ -118,7 +125,7 @@ class AIService {
 
     async deleteAssistant(assistantId) {
         if (!assistantId) return;
-        
+
         try {
             await this.openai.beta.assistants.del(assistantId);
         } catch (error) {
@@ -138,7 +145,7 @@ class AIService {
     async cancelActiveRuns(threadId) {
         try {
             const runsList = await this.openai.beta.threads.runs.list(threadId);
-            const activeRuns = runsList.data.filter(run => 
+            const activeRuns = runsList.data.filter(run =>
                 !['completed', 'cancelled', 'failed', 'expired', 'cancelling'].includes(run.status)
             );
 
@@ -166,13 +173,13 @@ class AIService {
             const runInfo = await this.openai.beta.threads.runs.retrieve(threadId, runId);
             runStatus = runInfo.status;
         } while (!targetStatuses.includes(runStatus));
-        
+
         return runStatus;
     }
 
     async handleToolCalls(threadId, runId, toolCalls, userId) {
         const toolOutputs = [];
-        
+
         for (const toolCall of toolCalls) {
             const args = JSON.parse(toolCall.function.arguments || '{}');
             let output;
@@ -181,12 +188,12 @@ class AIService {
                 case 'get_student_name':
                     output = await dbService.getStudentName(userId);
                     break;
-                    
+
                 case 'save_student_name':
                     const name = args.name || args.first_name;
                     output = await dbService.saveStudentName(userId, name);
                     break;
-                    
+
                 case 'get_contact_with_relevant_experience':
                     const result = await chromaService.initializeAndQuery(args.search_query);
                     output = JSON.stringify(result);
@@ -232,14 +239,14 @@ class AIService {
         while (attemptCount < maxAttempts) {
             try {
                 const run = await this.openai.beta.threads.runs.retrieve(threadId, runId);
-                
+
                 switch (run.status) {
                     case 'completed':
                         return run;
                     case 'requires_action':
                         await this.handleToolCalls(
-                            threadId, 
-                            runId, 
+                            threadId,
+                            runId,
                             run.required_action.submit_tool_outputs.tool_calls,
                             userId
                         );
@@ -257,20 +264,23 @@ class AIService {
             await new Promise(resolve => setTimeout(resolve, baseDelay * (attemptCount + 1)));
             attemptCount++;
         }
-        
+
         throw new Error('Run did not complete within the maximum number of attempts');
     }
 
+    /**
+     * Method to carry out moderation of a received Twilio message.  Called by routes/sms.
+     */
     async moderateMessage(text, messageId) {
         try {
             const moderationResponse = await this.openai.moderations.create({
                 model: "omni-moderation-latest",
                 input: text
             });
-    
+
             if (moderationResponse?.results?.length > 0) {
                 const moderationResult = moderationResponse.results[0];
-    
+
                 let flaggedReason = null;
                 if (moderationResult.flagged) {
                     flaggedReason = Object.entries(moderationResult.categories)
@@ -278,10 +288,10 @@ class AIService {
                         .map(([category, _]) => category)
                         .join(', ');
                 }
-        
+
                 // Save the flagged status and reason to the database
                 await dbService.updateMessageFlag(messageId, moderationResult.flagged, flaggedReason);
-    
+
                 return moderationResult.flagged;
             } else {
                 console.warn('Unexpected moderation response format:', moderationResponse);
@@ -293,12 +303,17 @@ class AIService {
         }
     }
 
+    /**
+     * Method to carry out response generation of received Twilio message.  Called by routes/sms.
+     * In this code, we are using the created assistant and thread.
+     */
     async generateResponse(message, threadId, userId) {
         let assistant = null;
-        
+
         try {
             await this.cancelActiveRuns(threadId);
 
+            // why do we create a new assistant, instead of just a thread?
             // Create assistant and send message in parallel
             const [createdAssistant, threadMessage] = await Promise.all([
                 this.openai.beta.assistants.create(this.createAssistantConfig()),
@@ -321,7 +336,7 @@ class AIService {
                 .filter(message => message.run_id === run.id && message.role === "assistant")
                 .pop();
 
-            return lastMessageForRun?.content[0]?.text?.value || 
+            return lastMessageForRun?.content[0]?.text?.value ||
                    "I apologize, but I'm having trouble generating a response right now.";
 
         } catch (error) {

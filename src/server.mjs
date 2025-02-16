@@ -2,11 +2,16 @@ import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import bodyParser from 'body-parser';
-import { config } from './config/config.mjs';
+import {config} from './config/config.mjs';
 import smsRouter from './routes/sms.mjs';
-import { dbService } from './services/database.mjs';
-import { ChromaClient } from 'chromadb';
+import {dbService} from './services/database.mjs';
+import {ChromaClient} from 'chromadb';
 
+/**
+ * Set up the NodeJS server, which is triggered through Twilio or through cli
+ *
+ * @returns {Promise<void>}
+ */
 export async function startServer() {
     const app = express();
     app.set('trust proxy', 1);
@@ -22,7 +27,7 @@ export async function startServer() {
         windowMs: 15 * 60 * 1000,
         max: 100
     }));
-    app.use(bodyParser.urlencoded({ 
+    app.use(bodyParser.urlencoded({
         extended: false,
         verify: (req, res, buf) => {
             req.rawBody = buf;
