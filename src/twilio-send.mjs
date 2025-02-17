@@ -34,7 +34,7 @@ try {
 
     twilioClient.messages
         .create({
-            body: 'responseMessage',
+            body: responseMessage,
             from: '+18443293312',
             to: '+16508621376'})
         .then(message => console.log(message.sid));
