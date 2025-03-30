@@ -225,10 +225,10 @@ CREATE TABLE events
 );
 
 INSERT INTO organizations(name, importance)
-VALUES ('MakingWaves Students', 10);
+VALUES ('Making Waves Students', 10);
 INSERT INTO organizations(name, importance)
-VALUES ('MakingWaves Academy', 9);
+VALUES ('Making Waves Academy', 9);
 INSERT INTO organizations(name, importance)
-VALUES ('MakingWaves Educational Foundation', 9);
+VALUES ('Making Waves Educational Foundation', 9);
 INSERT INTO organizations(name, importance)
 VALUES ('MakingWaves Alumni Organization', 8);
